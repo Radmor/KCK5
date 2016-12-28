@@ -6,65 +6,14 @@ from scipy.signal import blackmanharris, fftconvolve
 from time import time
 import sys
 import math
-
+import numpy
 
 import struct
 import wave
 from os import listdir, path
 datadir = 'train'
+WINDOWSIZE = 512
 
-
-
-
-
-def parabolic(f, x):
-    """Quadratic interpolation for estimating the true position of an
-    inter-sample maximum when nearby samples are known.
-
-    f is a vector and x is an index for that vector.
-
-    Returns (vx, vy), the coordinates of the vertex of a parabola that goes
-    through point x and its two neighbors.
-
-    Example:
-    Defining a vector f with a local maximum at index 3 (= 6), find local
-    maximum if points 2, 3, and 4 actually defined a parabola.
-
-    In [3]: f = [2, 3, 1, 6, 4, 2, 3, 1]
-
-    In [4]: parabolic(f, argmax(f))
-    Out[4]: (3.2142857142857144, 6.1607142857142856)
-
-    """
-    xv = 1/2. * (f[x-1] - f[x+1]) / (f[x-1] - 2 * f[x] + f[x+1]) + x
-    yv = f[x] - 1/4. * (f[x-1] - f[x+1]) * (xv - x)
-    return (xv, yv)
-
-
-def autocorr(sig, fs):
-    """
-    Estimate frequency using autocorrelation
-    """
-    # Calculate autocorrelation (same thing as convolution, but with
-    # one input reversed in time), and throw away the negative lags
-    corr = fftconvolve(sig, sig[::-1], mode='full')
-    corr = corr[len(corr)//2:]
-
-    # Find the first low point
-    d = diff(corr)
-    start = find(d > 0)[0]
-
-    # Find the next peak after the low point (other than 0 lag).  This bit is
-    # not reliable for long signals, due to the desired peak occurring between
-    # samples, and other peaks appearing higher.
-    # Should use a weighting function to de-emphasize the peaks at longer lags.
-    peak = argmax(corr[start:]) + start
-    px, py = parabolic(corr, peak)
-
-    return fs / px
-
-def calculate_frequencies(data):
-    return [autocorr(out, framerate) for out, framerate in data]
 
 
 def input_file(filepath):
@@ -88,37 +37,54 @@ def get_voices_sex(datadir):
 def get_recordings_amount(datadir):
     return len(listdir(datadir))
 
-def automated_division(frequencies):
-    minvalue = min(frequencies)
+def autocorrelation(file, frequency, windowsize):
+    waves, framerate = file
 
-    maxvalue = max(frequencies)
-    voices_sex = get_voices_sex(datadir)
+    dt = 1/frequency
 
-    print(maxvalue)
-    print(voices_sex)
-    recordings_amount = get_recordings_amount(datadir)
+    offset = math.floor(framerate * dt)
+    corr = numpy.correlate(numpy.array(waves[0:windowsize]), numpy.array(waves[offset:offset+windowsize]))
+    corr =  numpy.corrcoef(numpy.array([waves[0:windowsize], waves[offset:offset+windowsize]]))
+    return 0 if numpy.isnan(corr[0][1]) else corr[0][1]
 
-    max_efficiency = 0
+def classify_file(file, woman_frequency, man_frequency):
+    windowsize = WINDOWSIZE
 
-    final_division_value = minvalue
+    woman_corr = autocorrelation(file, woman_frequency, windowsize)
+    man_corr = autocorrelation(file, man_frequency, windowsize)
 
-    for division_value in range(math.floor(minvalue), math.floor(maxvalue)):
-        counter = 0
-        for frequency, voice_sex in zip(frequencies,voices_sex):
-            temp_sex = 'M' if frequency<=division_value else 'K'
-            counter += 1 if temp_sex==voice_sex else 0
+    return 'M' if man_corr>=woman_corr else 'K'
 
-        efficiency = counter/recordings_amount
-        # print(counter)
-        if efficiency > max_efficiency:
-            max_efficiency = efficiency
-            final_division_value = division_value
+def classify_files(files, woman_frequency, man_frequency):
+    return [classify_file(file, woman_frequency, man_frequency) for file in files]
 
-    return (final_division_value, max_efficiency)
+def compute_accuracy(classifications, answers):
+    return sum([1 if classiffication==answer else 0 for classiffication, answer in zip(classifications,answers)])/len(answers)
+
+def perform_computations(files):
+    woman_min_freq = 100
+    woman_max_freq = 300
+
+    man_min_freq = 100
+    man_max_freq = 300
+
+    accuracy = []
+
+    for woman_freq in range(woman_min_freq, woman_max_freq):
+        for man_freq in range(man_min_freq, man_max_freq):
+            classif = classify_files(files, woman_freq, man_freq)
+            accuracy.append(compute_accuracy(classif, get_voices_sex(datadir)))
+
+    return numpy.array(accuracy).reshape(len(range(woman_min_freq, woman_max_freq)), len(range(man_min_freq, man_max_freq)) )
+
 
 
 data = input_files(datadir)
-frequencies = calculate_frequencies(data)
 
-division_value, max_efficiency = automated_division(frequencies)
-print(division_value, max_efficiency)
+classif = classify_files(data, 190, 120)
+
+print(perform_computations(data))
+# frequencies = calculate_frequencies(data)
+
+# division_value, max_efficiency = automated_division(frequencies)
+# print(division_value, max_efficiency)
